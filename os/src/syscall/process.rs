@@ -1,9 +1,11 @@
 //! Process management syscalls
+use core::mem::size_of;
+
 use crate::{
     config::MAX_SYSCALL_NUM,
     task::{
-        change_program_brk, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus,
-    },
+        change_program_brk, exit_current_and_run_next, suspend_current_and_run_next, TaskStatus, current_user_token, query_task_info, mmap, munmap,
+    }, mm::translated_byte_buffer, timer::get_time_us,
 };
 
 #[repr(C)]
@@ -17,11 +19,11 @@ pub struct TimeVal {
 #[allow(dead_code)]
 pub struct TaskInfo {
     /// Task status in it's life cycle
-    status: TaskStatus,
+    pub(crate) status: TaskStatus,
     /// The numbers of syscall called by task
-    syscall_times: [u32; MAX_SYSCALL_NUM],
+    pub(crate) syscall_times: [u32; MAX_SYSCALL_NUM],
     /// Total running time of task
-    time: usize,
+    pub(crate) time: usize,
 }
 
 /// task exits and submit an exit code
@@ -43,27 +45,40 @@ pub fn sys_yield() -> isize {
 /// HINT: What if [`TimeVal`] is splitted by two pages ?
 pub fn sys_get_time(_ts: *mut TimeVal, _tz: usize) -> isize {
     trace!("kernel: sys_get_time");
-    -1
+    let _ts_translated = translated_byte_buffer(current_user_token(), _ts as *mut u8, size_of::<TimeVal>());
+    let _ts_ptr = _ts_translated[0].as_ptr() as *mut TimeVal;
+    let us = get_time_us();
+    unsafe {
+        (*_ts_ptr).sec = us / 1_000_000;
+        (*_ts_ptr).usec = us % 1_000_000;
+    }
+    0
 }
 
 /// YOUR JOB: Finish sys_task_info to pass testcases
 /// HINT: You might reimplement it with virtual memory management.
 /// HINT: What if [`TaskInfo`] is splitted by two pages ?
 pub fn sys_task_info(_ti: *mut TaskInfo) -> isize {
-    trace!("kernel: sys_task_info NOT IMPLEMENTED YET!");
-    -1
+    trace!("kernel: sys_task_info");
+    let _ti_translated = translated_byte_buffer(current_user_token(), _ti as *mut u8, size_of::<TaskInfo>());
+    let _ti_ptr = _ti_translated[0].as_ptr() as *mut TaskInfo;
+    query_task_info(_ti_ptr);
+    unsafe {
+        (*_ti_ptr).time = get_time_us() / 1000;
+    }
+    0
 }
 
 // YOUR JOB: Implement mmap.
-pub fn sys_mmap(_start: usize, _len: usize, _port: usize) -> isize {
-    trace!("kernel: sys_mmap NOT IMPLEMENTED YET!");
-    -1
+pub fn sys_mmap(start: usize, len: usize, port: usize) -> isize {
+    trace!("kernel: sys_mmap");
+    if mmap(start, len, port) { 0 } else { -1 }
 }
 
 // YOUR JOB: Implement munmap.
-pub fn sys_munmap(_start: usize, _len: usize) -> isize {
-    trace!("kernel: sys_munmap NOT IMPLEMENTED YET!");
-    -1
+pub fn sys_munmap(start: usize, len: usize) -> isize {
+    trace!("kernel: sys_munmap");
+    if munmap(start, len) { 0 } else { -1 }
 }
 /// change data segment size
 pub fn sys_sbrk(size: i32) -> isize {

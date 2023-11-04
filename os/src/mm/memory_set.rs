@@ -57,11 +57,33 @@ impl MemorySet {
         start_va: VirtAddr,
         end_va: VirtAddr,
         permission: MapPermission,
-    ) {
+    ) -> bool {
+        // 已存在对应map area
+        if self
+            .areas
+            .iter_mut()
+            .any(|area| {
+                let start_vaddr = area.vpn_range.get_start().0 << 12;
+                let end_vaddr = area.vpn_range.get_end().0 << 12;
+                !(start_va.0 >= end_vaddr || end_va.0 <= start_vaddr)
+            })
+        {
+            println!("existed map area: {}, {}", start_va.0, end_va.0);
+            return false;
+        }
+        // start 大于 end
+        if start_va > end_va {
+            return false;
+        }
+        // start_va 没有对齐
+        if !start_va.aligned() {
+            return false;
+        }
         self.push(
-            MapArea::new(start_va, end_va, MapType::Framed, permission),
-            None,
-        );
+                MapArea::new(start_va, end_va, MapType::Framed, permission),
+                None,
+            );  
+        true
     }
     fn push(&mut self, mut map_area: MapArea, data: Option<&[u8]>) {
         map_area.map(&mut self.page_table);
@@ -257,6 +279,24 @@ impl MemorySet {
             .find(|area| area.vpn_range.get_start() == start.floor())
         {
             area.append_to(&mut self.page_table, new_end.ceil());
+            true
+        } else {
+            false
+        }
+    }
+
+    /// unmap
+    pub fn unmap_area(&mut self, start: VirtAddr, end: VirtAddr) -> bool {
+        if !start.aligned() {
+            return false;
+        }
+        if let Some(idx) = self
+            .areas
+            .iter_mut()
+            .position(|a| a.vpn_range.get_start() == start.floor() && a.vpn_range.get_end() == end.ceil())
+        {
+            self.areas.get_mut(idx).unwrap().unmap(&mut self.page_table);
+            self.areas.remove(idx);
             true
         } else {
             false
