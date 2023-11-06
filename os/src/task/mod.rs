@@ -21,7 +21,7 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::loader::get_app_data_by_name;
+use crate::{loader::get_app_data_by_name, mm::{VirtAddr, VPNRange}};
 use alloc::sync::Arc;
 use lazy_static::*;
 pub use manager::{fetch_task, TaskManager};
@@ -114,4 +114,31 @@ lazy_static! {
 ///Add init process to the manager
 pub fn add_initproc() {
     add_task(INITPROC.clone());
+}
+
+///Record syscall
+pub fn record_syscall(syscall_id: usize) {
+    let task = current_task().unwrap();
+    let mut access = task.inner_exclusive_access();
+    let times = &mut access.syscall_times;
+    let u = times[syscall_id];
+    times[syscall_id] = u + 1;
+}
+
+/// mmap check
+pub fn mmap_check(start: VirtAddr, end: VirtAddr, is_mmap: bool) -> bool {
+    if !start.aligned() {
+        return false
+    }
+    let task = current_task().unwrap();
+    let access = task.inner_exclusive_access();
+    let mem_set = &access.memory_set;
+    for vpn in VPNRange::new(start.floor(), end.ceil()) {
+        if let Some(pte) = mem_set.translate(vpn) {
+            if pte.is_valid() == is_mmap {
+                return false
+            }
+        }
+    }
+    true
 }
