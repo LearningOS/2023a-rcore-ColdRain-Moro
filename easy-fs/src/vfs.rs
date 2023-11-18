@@ -30,7 +30,7 @@ impl Inode {
         }
     }
     /// Call a function over a disk inode to read it
-    fn read_disk_inode<V>(&self, f: impl FnOnce(&DiskInode) -> V) -> V {
+    pub fn read_disk_inode<V>(&self, f: impl FnOnce(&DiskInode) -> V) -> V {
         get_block_cache(self.block_id, Arc::clone(&self.block_device))
             .lock()
             .read(self.block_offset, f)
@@ -53,7 +53,7 @@ impl Inode {
                 DIRENT_SZ,
             );
             if dirent.name() == name {
-                return Some(dirent.inode_id() as u32);
+                return Some(dirent.inode_id());
             }
         }
         None
@@ -111,6 +111,8 @@ impl Inode {
             .lock()
             .modify(new_inode_block_offset, |new_inode: &mut DiskInode| {
                 new_inode.initialize(DiskInodeType::File);
+                // 初始 link 数为 1
+                new_inode.nlink = 1;
             });
         self.modify_disk_inode(|root_inode| {
             // append file in the dirent
@@ -138,6 +140,88 @@ impl Inode {
         )))
         // release efs lock automatically by compiler
     }
+
+    /// 创建 hard link
+    pub fn link(&self, old: &str, new: &str) -> Option<()> {
+        let mut fs = self.fs.lock();
+        // 拿到旧路径的 id
+        let old_inode_id = self.read_disk_inode(|root| self.find_inode_id(old, root))?;
+        let (old_inode_block_id, old_inode_block_offset) = fs.get_disk_inode_pos(old_inode_id);
+
+        // increase nlink
+        // 引用计数
+        get_block_cache(old_inode_block_id as usize, Arc::clone(&self.block_device))
+            .lock()
+            .modify(old_inode_block_offset, |dinode: &mut DiskInode| dinode.nlink += 1);
+
+        // 创建一个 dirent，将新路径和旧 inode 的 block 关联起来
+        self.modify_disk_inode(|root_inode| {
+            let fc = (root_inode.size as usize) / DIRENT_SZ;
+            let new_size = (fc + 1) * DIRENT_SZ;
+            self.increase_size(new_size as u32, root_inode, &mut fs);
+            let dirent = DirEntry::new(new, old_inode_block_id);
+            root_inode.write_at(fc * DIRENT_SZ, dirent.as_bytes(), &self.block_device)
+        });
+
+        Some(())
+    }
+
+    /// 删除 hard link
+    pub fn unlink(&self, path: &str) -> Option<()> {
+        let mut fs = self.fs.lock();
+        let inode_id = self.read_disk_inode(|root| self.find_inode_id(path, root))?;
+        let (block_id, block_offset) = fs.get_disk_inode_pos(inode_id);
+        let mut dirents: Vec<DirEntry> = Vec::new();
+        
+        // 实现方式有点蠢 但是想不到别的办法了
+        // 遍历全部 direntry 过滤掉 path 相等的 entry，再全部写回
+        self.read_disk_inode(|root| {
+            let fc = (root.size as usize) / DIRENT_SZ;
+            for i in 0..fc {
+                let mut dirent = DirEntry::empty();
+                root.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device);
+                if dirent.name() == path {
+                    continue;
+                }
+                dirents.push(dirent);
+            }
+        });
+
+        self.modify_disk_inode(|root| {
+            // 清空 root inode
+            let blocks = root.clear_size(&self.block_device);
+            // 释放所有块
+            for block in blocks {
+                fs.dealloc_data(block)
+            }
+            let nlen = dirents.len();
+            // 将大小设置为 dirents 的大小
+            self.increase_size((nlen * DIRENT_SZ) as u32, root, &mut fs);
+            // 写回
+            for (i, dirent) in dirents.iter_mut().enumerate() {
+                root.write_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device);
+            }
+        });
+
+        // 减掉引用计数
+        get_block_cache(block_id as usize, Arc::clone(&self.block_device))
+            .lock()
+            .modify(block_offset, |dinode: &mut DiskInode| {
+                dinode.nlink -= 1;
+                // 归 0 时释放 data
+                if dinode.nlink == 0 {
+                    let dealloc_blocks = dinode.clear_size(&self.block_device);
+                    for block in dealloc_blocks {
+                        fs.dealloc_data(block);
+                    }
+                }
+            });
+
+        // 将 block cache 写入磁盘
+        block_cache_sync_all();
+        Some(())
+    }
+
     /// List inodes under current inode
     pub fn ls(&self) -> Vec<String> {
         let _fs = self.fs.lock();

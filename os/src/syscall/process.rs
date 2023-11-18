@@ -1,11 +1,13 @@
 //! Process management syscalls
 //!
+use core::mem::size_of;
+
 use alloc::sync::Arc;
 
 use crate::{
-    config::MAX_SYSCALL_NUM,
+    config::{MAX_SYSCALL_NUM, BIG_STRIDE},
     fs::{open_file, OpenFlags},
-    mm::{translated_refmut, translated_str},
+    mm::{translated_refmut, translated_str, MapPermission, VirtAddr, translated_byte_buffer},
     task::{
         add_task, current_task, current_user_token, exit_current_and_run_next,
         suspend_current_and_run_next, TaskStatus, mmap_check,
@@ -237,8 +239,9 @@ pub fn sys_spawn(path: *const u8) -> isize {
         current_task().unwrap().pid.0
     );
     let path = translated_str(current_user_token(), path);
-    if let Some(elf_data) = get_app_data_by_name(&path) {
-        let task = current_task().unwrap().spawn(elf_data);
+    if let Some(app_inode) = open_file(path.as_str(), OpenFlags::RDONLY) {
+        let all_data = app_inode.read_all();
+        let task = current_task().unwrap().spawn(&all_data);
         let pid = task.pid.0;
         add_task(task);
         return pid as isize;

@@ -4,14 +4,14 @@
 //!
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
-use super::File;
-use crate::drivers::BLOCK_DEVICE;
+use super::{File, Stat, StatMode};
+use crate::{drivers::BLOCK_DEVICE, task::current_task};
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use bitflags::*;
-use easy_fs::{EasyFileSystem, Inode};
+use easy_fs::{EasyFileSystem, Inode, DiskInodeType};
 use lazy_static::*;
 
 /// inode in memory
@@ -124,6 +124,31 @@ pub fn open_file(name: &str, flags: OpenFlags) -> Option<Arc<OSInode>> {
     }
 }
 
+/// Create a hard link
+pub fn link(old: &str, new: &str) -> Option<()> {
+    ROOT_INODE.link(old, new)
+}
+
+/// Remove a hard link or a file
+pub fn unlink(path: &str) -> Option<()> {
+    ROOT_INODE.unlink(path)
+}
+
+/// Get information of a file
+pub fn fstat(fd: usize, dst: &mut Stat) -> Option<()> {
+    let access = current_task()
+        .unwrap();
+    let access = access.inner_exclusive_access();
+    let file = access.fd_table
+        .get(fd);
+    let file = match file {
+        Some(Some(file)) => file,
+        _ => { return None; }
+    };
+    file.stat(dst);
+    Some(())
+}
+
 impl File for OSInode {
     fn readable(&self) -> bool {
         self.readable
@@ -154,5 +179,15 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn stat(&self, dst: &mut Stat) {
+        let inner = self.inner.exclusive_access();
+        inner.inode.read_disk_inode(|dinode| {
+            dst.mode = match dinode.type_ {
+                DiskInodeType::File => StatMode::FILE,
+                DiskInodeType::Directory => StatMode::DIR,
+            };
+            dst.nlink = dinode.nlink;
+        });
     }
 }
