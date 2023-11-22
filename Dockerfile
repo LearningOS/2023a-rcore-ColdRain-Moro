@@ -81,5 +81,14 @@ RUN rustup target add riscv64gc-unknown-none-elf && \
     rustup component add rust-src && \
     rustup component add llvm-tools-preview
 
+# 4. Install musl cross-compiler for RISC-V
+WORKDIR ${HOME}
+RUN wget https://musl.cc/riscv64-linux-musl-cross.tgz && \
+    tar xvzf riscv64-linux-musl-cross.tgz -C /usr/local && \
+    rm riscv64-linux-musl-cross.tgz
+
+# Update PATH to include musl cross-compiler binaries
+ENV PATH="/usr/local/riscv64-linux-musl-cross/bin:${PATH}"
+
 # Ready to go
 WORKDIR ${HOME}

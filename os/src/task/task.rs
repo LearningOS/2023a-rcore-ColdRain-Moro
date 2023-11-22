@@ -181,30 +181,63 @@ impl TaskControlBlock {
             .translate(VirtAddr::from(TRAP_CONTEXT_BASE).into())
             .unwrap()
             .ppn();
-        // push arguments on user stack
-        user_sp -= (args.len() + 1) * core::mem::size_of::<usize>();
-        let argv_base = user_sp;
-        let mut argv: Vec<_> = (0..=args.len())
-            .map(|arg| {
-                translated_refmut(
-                    memory_set.token(),
-                    (argv_base + arg * core::mem::size_of::<usize>()) as *mut usize,
-                )
-            })
-            .collect();
-        *argv[args.len()] = 0;
-        for i in 0..args.len() {
-            user_sp -= args[i].len() + 1;
-            *argv[i] = user_sp;
+        // // push arguments on user stack
+        // // 这里给 args 每个参数腾出空间
+        // user_sp -= (args.len() + 1) * core::mem::size_of::<usize>();
+        // let argv_base = user_sp;
+        // // 这里拿到每个参数的指针
+        // let mut argv: Vec<_> = (0..=args.len())
+        //     .map(|arg| {
+        //         translated_refmut(
+        //             memory_set.token(),
+        //             (argv_base + (args.len() - arg) * core::mem::size_of::<usize>()) as *mut usize,
+        //         )
+        //     })
+        //     .collect();
+        // // argc
+        // *argv[args.len()] = 0;
+        // // 设置 argv 指针指向的内容
+        // for i in 0..args.len() {
+        //     user_sp -= args[i].len() + 1;
+        //     *argv[i] = user_sp;
+        //     let mut p = user_sp;
+        //     for c in args[i].as_bytes() {
+        //         *translated_refmut(memory_set.token(), p as *mut u8) = *c;
+        //         p += 1;
+        //     }
+        //     // 末尾用 0 分割
+        //     *translated_refmut(memory_set.token(), p as *mut u8) = 0;
+        // }
+        
+        let mut arg_addrs: Vec<usize> = Vec::new();
+
+        // 腾出栈空间设置字符串
+        for arg in args.iter() {
+            user_sp -= arg.len() + 1;
+            arg_addrs.push(user_sp);
             let mut p = user_sp;
-            for c in args[i].as_bytes() {
+            for c in arg.as_bytes() {
                 *translated_refmut(memory_set.token(), p as *mut u8) = *c;
                 p += 1;
             }
+            // 末尾用 0 分割
             *translated_refmut(memory_set.token(), p as *mut u8) = 0;
         }
-        // make the user_sp aligned to 8B for k210 platform
-        user_sp -= user_sp % core::mem::size_of::<usize>();
+
+        // 然后设置指向参数字符串的指针
+        for addr in arg_addrs.iter() {
+            user_sp -= core::mem::size_of::<usize>();
+            *translated_refmut(memory_set.token(), user_sp as *mut u8 as *mut usize) = *addr;
+        }
+
+        let argv_base = user_sp;
+
+        // 设置 argc
+        user_sp -= core::mem::size_of::<usize>();
+        *translated_refmut(memory_set.token(), user_sp as *mut u8 as *mut usize) = args.len();
+
+        // // make the user_sp aligned to 8B for k210 platform
+        // user_sp -= user_sp % core::mem::size_of::<usize>();
 
         // **** access current TCB exclusively
         let mut inner = self.inner_exclusive_access();
