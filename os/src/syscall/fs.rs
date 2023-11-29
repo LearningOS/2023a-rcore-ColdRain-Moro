@@ -1,8 +1,14 @@
 //! File and filesystem-related syscalls
 use crate::fs::{make_pipe, open_file, OpenFlags, Stat};
-use crate::mm::{translated_byte_buffer, translated_refmut, translated_str, UserBuffer};
+use crate::mm::{translated_byte_buffer, translated_refmut, translated_str, UserBuffer, translated_ref};
 use crate::task::{current_task, current_user_token};
 use alloc::sync::Arc;
+
+#[repr(C)]
+pub struct Iovec {
+    iov_base: *const u8,
+    iov_len: usize
+}
 
 pub fn sys_write(fd: usize, buf: *const u8, len: usize) -> isize {
     trace!("kernel:pid[{}] sys_write", current_task().unwrap().pid.0);
@@ -122,4 +128,25 @@ pub fn sys_linkat(_old_name: *const u8, _new_name: *const u8) -> isize {
 pub fn sys_unlinkat(_name: *const u8) -> isize {
     trace!("kernel:pid[{}] sys_unlinkat NOT IMPLEMENTED", current_task().unwrap().pid.0);
     -1
+}
+
+/// writev
+/// iov 是一个 Iovec 结构体数组
+pub fn sys_writev(fd: usize, iov: *const Iovec, iovcnt: usize) -> isize {
+    trace!("kernel:pid[{}] sys_writev", current_task().unwrap().pid.0);
+    let token = current_user_token();
+    let mut ptr = iov;
+    let mut cnt = 0;
+    for _ in 0..iovcnt {
+        let translated_ref = translated_ref(token, ptr);
+        let res = sys_write(fd, translated_ref.iov_base, translated_ref.iov_len);
+        if res == -1 {
+            return -1;
+        }
+        cnt += res;
+        unsafe {
+            ptr = ptr.add(1);
+        }
+    }
+    cnt
 }

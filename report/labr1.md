@@ -71,3 +71,11 @@ int __start_main(long *p)
 ## 题外话
 
 之前一直用 macos 做 lab，但是这次因为没找到mac上的 `riscv64-linux-musl-cross` 交叉编译工具链，并且 macos 上没有用户态 qemu 无法进行对拍，所以用了 docker。
+
+## 问答题
+
+> ch6_file0.elf: ELF 64-bit LSB executable, UCB RISC-V, RVC, double-float ABI, version 1 (SYSV), statically linked, stripped
+>
+> ch6_file0.bin: data
+
+elf 中有程序头之类的各种其他数据，bin剔除了这些数据减小了体积

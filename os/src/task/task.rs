@@ -4,9 +4,9 @@ use super::{kstack_alloc, pid_alloc, KernelStack, PidHandle, SignalActions, Sign
 use crate::{
     config::TRAP_CONTEXT_BASE,
     fs::{File, Stdin, Stdout},
-    mm::{translated_refmut, MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE},
+    mm::{MemorySet, PhysPageNum, VirtAddr, KERNEL_SPACE},
     sync::UPSafeCell,
-    trap::{trap_handler, TrapContext},
+    trap::{trap_handler, TrapContext}, loaders,
 };
 use alloc::{
     string::String,
@@ -208,33 +208,37 @@ impl TaskControlBlock {
         //     // 末尾用 0 分割
         //     *translated_refmut(memory_set.token(), p as *mut u8) = 0;
         // }
+        let mem_token = memory_set.token();
+        user_sp = loaders::ElfLoader::new(elf_data)
+            .unwrap()
+            .init_stack(mem_token, user_sp, args.clone());
         
-        let mut arg_addrs: Vec<usize> = Vec::new();
+        // let mut arg_addrs: Vec<usize> = Vec::new();
 
-        // 腾出栈空间设置字符串
-        for arg in args.iter() {
-            user_sp -= arg.len() + 1;
-            arg_addrs.push(user_sp);
-            let mut p = user_sp;
-            for c in arg.as_bytes() {
-                *translated_refmut(memory_set.token(), p as *mut u8) = *c;
-                p += 1;
-            }
-            // 末尾用 0 分割
-            *translated_refmut(memory_set.token(), p as *mut u8) = 0;
-        }
+        // // 腾出栈空间设置字符串
+        // for arg in args.iter() {
+        //     user_sp -= arg.len() + 1;
+        //     arg_addrs.push(user_sp);
+        //     let mut p = user_sp;
+        //     for c in arg.as_bytes() {
+        //         *translated_refmut(memory_set.token(), p as *mut u8) = *c;
+        //         p += 1;
+        //     }
+        //     // 末尾用 0 分割
+        //     *translated_refmut(memory_set.token(), p as *mut u8) = 0;
+        // }
 
-        // 然后设置指向参数字符串的指针
-        for addr in arg_addrs.iter() {
-            user_sp -= core::mem::size_of::<usize>();
-            *translated_refmut(memory_set.token(), user_sp as *mut u8 as *mut usize) = *addr;
-        }
+        // // 然后设置指向参数字符串的指针
+        // for addr in arg_addrs.iter() {
+        //     user_sp -= core::mem::size_of::<usize>();
+        //     *translated_refmut(memory_set.token(), user_sp as *mut u8 as *mut usize) = *addr;
+        // }
 
-        let argv_base = user_sp;
+        // let argv_base = user_sp;
 
-        // 设置 argc
-        user_sp -= core::mem::size_of::<usize>();
-        *translated_refmut(memory_set.token(), user_sp as *mut u8 as *mut usize) = args.len();
+        // // 设置 argc
+        // user_sp -= core::mem::size_of::<usize>();
+        // *translated_refmut(memory_set.token(), user_sp as *mut u8 as *mut usize) = args.len();
 
         // // make the user_sp aligned to 8B for k210 platform
         // user_sp -= user_sp % core::mem::size_of::<usize>();
@@ -254,7 +258,7 @@ impl TaskControlBlock {
             trap_handler as usize,
         );
         trap_cx.x[10] = args.len();
-        trap_cx.x[11] = argv_base;
+        trap_cx.x[11] = user_sp;
         *inner.get_trap_cx() = trap_cx;
         // **** release current PCB
     }
